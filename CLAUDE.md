@@ -2,6 +2,81 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Using bslog to Query Logs
+
+### How Better Stack stores log data
+Log data lives in **S3**, not in the ClickHouse `remote()` cluster. The `remote(t..._logs)` cluster exists but is always empty — ignore it. The correct table function is:
+
+```sql
+s3Cluster(primary, t{team_id}_{table_name}_s3)
+```
+
+Get `team_id` and `table_name` from:
+```bash
+bslog sources list --format json  # → attributes.team_id, attributes.table_name
+```
+
+### Query endpoint
+The ClickHouse HTTP endpoint is region-specific. Check `data_region` in the sources JSON and use:
+```
+https://{data_region}-connect.betterstackdata.com
+```
+This is hardcoded in `src/api/client.ts` as `QUERY_BASE_URL` — update it if your sources are in a different region.
+
+### Credentials
+Two separate credentials are required:
+- `BETTERSTACK_API_TOKEN` — for source discovery (`bslog sources list`)
+- `BETTERSTACK_QUERY_USERNAME` / `BETTERSTACK_QUERY_PASSWORD` — for querying log data
+
+Query credentials come from **Better Stack > Logs > Dashboards > Connect remotely**. Store in `~/.bashrc`. If you get auth errors, regenerate them there.
+
+### Common commands
+```bash
+bslog sources list                          # see available sources and their metadata
+bslog errors <source> --since 12h          # recent errors
+bslog errors <source> --since 1h -v        # -v shows generated SQL for debugging
+bslog tail <source> -n 50                  # last 50 logs
+bslog errors <source> --since 2024-01-01T12:00 --until 2024-01-02T00:00
+```
+
+### Raw SQL patterns
+```bash
+# Use bslog sql for aggregations — notEmpty() instead of != '' (escaping issue)
+bslog sql "SELECT JSONExtractString(raw, 'level') as level, count() as cnt FROM s3Cluster(primary, t{team_id}_{table_name}_s3) WHERE dt >= toDateTime64('2024-01-01 00:00:00', 3) GROUP BY level FORMAT JSONEachRow"
+```
+
+```sql
+-- Error summary by source class and message
+SELECT
+  JSONExtractString(JSONExtractString(raw, 'data'), 'sourceClass') as sourceClass,
+  JSONExtractString(raw, 'message') as message,
+  count() as cnt
+FROM s3Cluster(primary, t{team_id}_{table_name}_s3)
+WHERE dt >= toDateTime64('2024-01-01 00:00:00', 3)
+  AND JSONExtractString(raw, 'level') = 'error'
+  AND notEmpty(JSONExtractString(JSONExtractString(raw, 'data'), 'stack'))
+GROUP BY sourceClass, message
+ORDER BY cnt DESC
+FORMAT JSONEachRow
+
+-- Check what date range has data
+SELECT min(dt), max(dt), count() FROM s3Cluster(primary, t{team_id}_{table_name}_s3) FORMAT JSONEachRow
+```
+
+### Log structure (NestJS/Winston)
+Each row has `dt` (timestamp) and `raw` (JSON string). Common fields:
+- `raw.level` — `"error"`, `"warn"`, `"info"`
+- `raw.message` — the log message
+- `raw.data.sourceClass` — class that emitted the log
+- `raw.data.stack` — stack trace (exceptions only)
+- `raw.data.correlationId` — links exception logs to their HTTP request log
+
+### Gotchas
+- **`!= ''` breaks in `bslog sql`** — the command escapes backslashes, causing ClickHouse syntax errors. Use `notEmpty()` instead
+- **S3 queries are slower than `remote()`** — a few seconds is normal
+- **30s timeout** hardcoded in `src/api/client.ts` — increase for complex aggregations
+- **`bslog sql` strips `FORMAT JSONEachRow`** if not included — always append it explicitly
+
 ## Development Commands
 
 ### Building and Running
@@ -96,7 +171,7 @@ The separation allows for granular access control - some users might list source
 1. User provides GraphQL-like query or uses convenience commands (tail, errors, etc.)
 2. `parseGraphQLQuery()` converts GraphQL syntax to `QueryOptions` object
 3. `QueryAPI.buildQuery()` constructs ClickHouse SQL:
-   - Resolves source name to table (`t{team_id}_{table_name}_logs`)
+   - Resolves source name to S3 table (`s3Cluster(primary, t{team_id}_{table_name}_s3)`)
    - Builds WHERE clauses for filters (level, subsystem, time range, search)
    - Uses `JSON_VALUE()` to extract fields from raw JSON logs
 4. Query executed via HTTP to Better Stack's ClickHouse endpoint

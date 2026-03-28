@@ -4721,7 +4721,7 @@ function toClickHouseDateTime(date) {
 
 // src/api/client.ts
 var TELEMETRY_BASE_URL = "https://telemetry.betterstack.com/api/v1";
-var QUERY_BASE_URL = "https://eu-nbg-2-connect.betterstackdata.com";
+var QUERY_BASE_URL = "https://eu-fsn-3-connect.betterstackdata.com";
 var DEFAULT_TIMEOUT_MS = 30000;
 
 class BetterStackClient {
@@ -5054,9 +5054,9 @@ class QueryAPI {
     if (!source) {
       throw new Error(`Source not found: ${sourceName}`);
     }
-    const tableName = `t${source.attributes.team_id}_${source.attributes.table_name}_logs`;
+    const tableName = `t${source.attributes.team_id}_${source.attributes.table_name}_s3`;
     const fields = options.fields && options.fields.length > 0 ? this.buildFieldSelection(options.fields) : "dt, raw";
-    let sql = `SELECT ${fields} FROM remote(${tableName})`;
+    let sql = `SELECT ${fields} FROM s3Cluster(primary, ${tableName})`;
     const conditions = [];
     if (options.since) {
       const sinceDate = parseTimeString(options.since);

@@ -178,13 +178,13 @@ export class QueryAPI {
     }
 
     // Build the SQL query using team_id and table_name from the source
-    const tableName = `t${source.attributes.team_id}_${source.attributes.table_name}_logs`
+    const tableName = `t${source.attributes.team_id}_${source.attributes.table_name}_s3`
     const fields =
       options.fields && options.fields.length > 0
         ? this.buildFieldSelection(options.fields)
         : 'dt, raw'
 
-    let sql = `SELECT ${fields} FROM remote(${tableName})`
+    let sql = `SELECT ${fields} FROM s3Cluster(primary, ${tableName})`
 
     // Build WHERE clause
     const conditions: string[] = []
